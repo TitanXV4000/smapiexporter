@@ -10,7 +10,7 @@ which smjsonparser imports into Mongo.
     target can change without LastUpdateTime changing, and refreshing them every minute
     keeps logTime moving for the freshness checks (qmond: newest logTime; sf-notify via
     open.php: newest logTime of the unassigned queue) when no case changes for a while.
-  - First start (no state file): all open cases plus those closed in the last BACKFILL_DAYS.
+  - First start (no state file): all open cases plus closed ones updated in the last BACKFILL_DAYS.
 Field mapping and findings: qmon/notes/otsm-api.md.
 */
 const puppeteer = require('puppeteer');
@@ -188,10 +188,12 @@ function saveState(s) { fs.writeFileSync(STATE_FILE + '.tmp', JSON.stringify(s))
 
 async function backfill() {
     const since = Date.now() - config.BACKFILL_DAYS * 86400 * 1000;
-    logger.info(`Back-fill: all open cases and cases closed in the last ${config.BACKFILL_DAYS} days...`);
+    logger.info(`Back-fill: all open cases and closed cases updated in the last ${config.BACKFILL_DAYS} days...`);
     const layout = DETAIL_LAYOUT;
     const ents = (await requests(`Status != 'RequestStatusClosed_c'`, layout))
-        .concat(await requests(`Status = 'RequestStatusClosed_c' and CloseTime > ${since}`, layout));
+        // Closed cases updated in the window: closing updates a case, and some closed cases
+        // have no CloseTime (only Closed/Resolved DateTime, or none), so CloseTime alone misses them
+        .concat(await requests(`Status = 'RequestStatusClosed_c' and LastUpdateTime > ${since}`, layout));
     const files = writeBatches(ents.map(e => toRow(e, true)));
     logger.info(`Back-fill: ${ents.length} cases in ${files} files.`);
     return ents.reduce((m, e) => Math.max(m, e.properties.LastUpdateTime || 0), 0);

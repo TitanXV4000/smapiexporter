@@ -15,8 +15,8 @@ inside that page, so it uses the browser session. Every minute it writes one bat
   empty in practice, this keeps the newest `logTime` (what qmon's freshness checks read)
   moving every minute even when no case changes.
 
-On first start (no state file) it back-fills all open cases plus those closed in the last
-`BACKFILL_DAYS`. The time of the newest change is kept in `OUTPUT_PATH/state/api-state.json`,
+On first start (no state file) it back-fills all open cases plus closed ones updated in the
+last `BACKFILL_DAYS`. The time of the newest change is kept in `OUTPUT_PATH/state/api-state.json`,
 so after a stop it picks up everything changed while it was down. If the parser has more
 than `BACKLOG_LIMIT` unread batches, only the changed cases are written until it catches up.
 
@@ -32,7 +32,7 @@ keyed by the column names of the old QMON report (plus `Description`).
 | `OUTPUT_PATH` | `/smexports-api` | where batches are written |
 | `REPORT_INTERVAL` | `60000` | ms between batches |
 | `OVERLAP_MS` | `120000` | look-back added to "changed since" |
-| `BACKFILL_DAYS` | `90` | closed cases loaded on first start |
+| `BACKFILL_DAYS` | `90` | closed cases updated this recently are loaded on first start |
 | `PAGE_SIZE`, `BATCH_ROWS` | `1000` | API page size, rows per file |
 | `MAX_FAILED_CYCLES` | `5` | failed minutes in a row before exiting |
 | `BACKLOG_LIMIT` | `20` | unread batches before writing changed cases only |
