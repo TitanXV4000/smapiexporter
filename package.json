@@ -1,0 +1,17 @@
+{
+  "name": "smapiexporter",
+  "version": "1.0.0",
+  "description": "Read OTSM (SMAX) cases from the REST API every minute and write JSON batches for smjsonparser",
+  "main": "index.js",
+  "repository": "https://github.com/TitanXV4000/smapiexporter",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "tsanford",
+  "license": "ISC",
+  "dependencies": {
+    "puppeteer": "^5.5.0",
+    "tsanford-logger": "0.0.2",
+    "winston-daily-rotate-file": "^4.5.0"
+  }
+}
