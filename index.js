@@ -3,9 +3,11 @@ Keeps one browser logged in to OTSM and reads cases from the SMAX EMS REST API
 (replacing smexporter's QMON report export). Every INTERVAL it writes one JSON batch
 to OUTPUT_PATH, as rows keyed by the report's column names (plus "Description"),
 which smjsonparser imports into Mongo.
-  - "Updated today" (the report's filter), without Description, so every case updated
-    today is refreshed each minute and logTime keeps moving for qmon's freshness check.
   - Cases changed since the previous batch, with Description (only these carry it).
+  - All open cases with no owner (the unassigned queue), without Description. Their SLT
+    target can change without LastUpdateTime changing, and refreshing them every minute
+    keeps logTime moving for the freshness checks (qmond: newest logTime; sf-notify via
+    open.php: newest logTime of the unassigned queue) when no case changes for a while.
   - First start (no state file): all open cases plus those closed in the last BACKFILL_DAYS.
 Field mapping and findings: qmon/notes/otsm-api.md.
 */
@@ -175,7 +177,6 @@ function writeBatches(rows) {
 
 function loadState() { try { return JSON.parse(fs.readFileSync(STATE_FILE)); } catch (e) { return null; } }
 function saveState(s) { fs.writeFileSync(STATE_FILE + '.tmp', JSON.stringify(s)); fs.renameSync(STATE_FILE + '.tmp', STATE_FILE); }
-function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }   // container TZ: America/Denver
 
 async function backfill() {
     const since = Date.now() - config.BACKFILL_DAYS * 86400 * 1000;
@@ -191,20 +192,20 @@ async function backfill() {
 async function cycle(state) {
     const t0 = Date.now();
     const changed = await requests(`LastUpdateTime > ${Math.max(0, state.lastUpdate - config.OVERLAP_MS)}`, LAYOUT + ',Description');
-    const today = await requests(`LastUpdateTime >= ${startOfToday()}`, LAYOUT);
+    const unowned = await requests(`Status != 'RequestStatusClosed_c' and OwnedByPerson = null`, LAYOUT);
     const byId = new Map();
-    for (const e of today) byId.set(e.properties.Id, { e, desc: false });
+    for (const e of unowned) byId.set(e.properties.Id, { e, desc: false });
     for (const e of changed) byId.set(e.properties.Id, { e, desc: true });     // full rows with Description win
     const all = [...byId.values()];
     // If the parser isn't reading (stopped or behind), write only the changed cases: they
-    // carry changes and descriptions that must not be lost, while the "updated today" rows
-    // are repeated every minute anyway. Keeps the backlog small until the parser catches up.
+    // carry changes and descriptions that must not be lost, while the unowned cases are
+    // repeated every minute anyway. Keeps the backlog small until the parser catches up.
     const backlog = fs.readdirSync(config.OUTPUT_PATH).filter(f => f.endsWith('.json')).length;
     if (backlog > config.BACKLOG_LIMIT) logger.warn(`${backlog} batches not yet read by the parser; writing only the ${changed.length} changed cases.`);
     const rows = backlog > config.BACKLOG_LIMIT ? all.filter(x => x.desc) : all;
     const files = writeBatches(rows.map(x => toRow(x.e, x.desc)));
     const newest = all.reduce((m, x) => Math.max(m, x.e.properties.LastUpdateTime || 0), state.lastUpdate);
-    logger.info(`Batch: ${all.length} cases (${today.length} updated today, ${changed.length} changed with description), ${files} file(s), ${Date.now() - t0} ms.`);
+    logger.info(`Batch: ${all.length} cases (${changed.length} changed with description, ${unowned.length} unowned), ${files} file(s), ${Date.now() - t0} ms.`);
     return newest;
 }
 

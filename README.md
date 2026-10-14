@@ -8,8 +8,11 @@ them in Mongo for qmon and wallboard. It replaces the report download done by
 One headless browser stays logged in (OpenText SAML sign-in) and the API is called from
 inside that page, so it uses the browser session. Every minute it writes one batch with:
 
-- every case updated today, without Description (keeps qmon's data fresh), and
-- every case changed since the previous batch (less a 2-minute overlap), with Description.
+- every case changed since the previous batch (less a 2-minute overlap), with Description, and
+- every open case with no owner (the unassigned queue), without Description. Their SLT
+  target can change without the case's update time changing, and since the queue is never
+  empty in practice, this keeps the newest `logTime` (what qmon's freshness checks read)
+  moving every minute even when no case changes.
 
 On first start (no state file) it back-fills all open cases plus those closed in the last
 `BACKFILL_DAYS`. The time of the newest change is kept in `OUTPUT_PATH/state/api-state.json`,
@@ -40,9 +43,9 @@ keyed by the column names of the old QMON report (plus `Description`).
 ```
 docker build -t tsanford/smapiexporter .
 docker run -d --name smapiexporter --restart unless-stopped --shm-size 2g \
-  -e TZ=America/Denver -v smapidata:/smexports-api --env-file smexporter.env \
+  -e TZ=America/Denver -v smapidata:/smexports-api --env-file smapiexporter.env \
   tsanford/smapiexporter
 ```
 
-`TZ` matters: "updated today" starts at local midnight. On any unexpected error the process
+On any unexpected error the process
 exits, so Docker restarts it with a fresh login.
