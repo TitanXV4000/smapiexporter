@@ -104,12 +104,14 @@ async function apiGet(url, retried) {
     return json.entities || [];
 }
 
-// All pages of a Request query
+// All pages of a Request query. Sorted by Id, which never changes: sorted by LastUpdateTime,
+// a case updated while the pages are read moves to the end, so it is read twice and the case
+// after it slips back across a page boundary and is never read.
 async function requests(filter, layout) {
     const all = [];
     for (let skip = 0; ; skip += config.PAGE_SIZE) {
         const url = `${EMS('Request')}?filter=${encodeURIComponent(filter)}&layout=${encodeURIComponent(layout)}` +
-            `&order=${encodeURIComponent('LastUpdateTime asc')}&size=${config.PAGE_SIZE}&skip=${skip}`;
+            `&order=${encodeURIComponent('Id asc')}&size=${config.PAGE_SIZE}&skip=${skip}`;
         const batch = await apiGet(url);
         all.push(...batch);
         if (batch.length < config.PAGE_SIZE) return all;
