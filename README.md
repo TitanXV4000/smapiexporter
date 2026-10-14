@@ -8,7 +8,8 @@ them in Mongo for qmon and wallboard. It replaces the report download done by
 One headless browser stays logged in (OpenText SAML sign-in) and the API is called from
 inside that page, so it uses the browser session. Every minute it writes one batch with:
 
-- every case changed since the previous batch (less a 2-minute overlap), with Description, and
+- every case changed since the previous batch (less a 2-minute overlap), with Description
+  and the latest comment, and
 - every open case with no owner (the unassigned queue), without Description. Their SLT
   target can change without the case's update time changing, and since the queue is never
   empty in practice, this keeps the newest `logTime` (what qmon's freshness checks read)

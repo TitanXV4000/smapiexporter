@@ -1,9 +1,11 @@
 /* smapiexporter
 Keeps one browser logged in to OTSM and reads cases from the SMAX EMS REST API
 (replacing smexporter's QMON report export). Every INTERVAL it writes one JSON batch
-to OUTPUT_PATH, as rows keyed by the report's column names (plus "Description"),
+to OUTPUT_PATH, as rows keyed by the report's column names (plus "Description" and
+"Latest Comment"),
 which smjsonparser imports into Mongo.
-  - Cases changed since the previous batch, with Description (only these carry it).
+  - Cases changed since the previous batch, with Description and the latest comment
+    (only these carry them; a new comment updates LastUpdateTime).
   - All open cases with no owner (the unassigned queue), without Description. Their SLT
     target can change without LastUpdateTime changing, and refreshing them every minute
     keeps logTime moving for the freshness checks (qmond: newest logTime; sf-notify via
@@ -52,6 +54,7 @@ const LAYOUT = [
     'RequestToCompany.DisplayLabel', 'RequestToCompany.TimeZone', 'RequestToCompany.CompanyTimeZoneUser_c', 'RequestToCompany.RoutingRegion_c',
     'RegisteredForLocation.DisplayLabel', 'RegisteredForLocation.DisplayName',
 ].join(',');
+const DETAIL_LAYOUT = LAYOUT + ',Description,LatestComment_c';   // changed cases only
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const rel = (e, link, prop) => ((e.related_properties || {})[link] || {})[prop];
@@ -153,7 +156,12 @@ function toRow(e, withDescription) {
         'Report location.Display label': val(rel(e, 'RegisteredForLocation', 'DisplayLabel')),
         'Report location.Display Name': val(rel(e, 'RegisteredForLocation', 'DisplayName')),
     };
-    if (withDescription) row['Description'] = val(p.Description);
+    if (withDescription) {
+        row['Description'] = val(p.Description);
+        // Text of the newest comment of any kind (public, internal, customer, system),
+        // as OTSM keeps it in LatestComment_c: plain text without line breaks
+        row['Latest Comment'] = val(p.LatestComment_c);
+    }
     return row;
 }
 
@@ -181,7 +189,7 @@ function saveState(s) { fs.writeFileSync(STATE_FILE + '.tmp', JSON.stringify(s))
 async function backfill() {
     const since = Date.now() - config.BACKFILL_DAYS * 86400 * 1000;
     logger.info(`Back-fill: all open cases and cases closed in the last ${config.BACKFILL_DAYS} days...`);
-    const layout = LAYOUT + ',Description';
+    const layout = DETAIL_LAYOUT;
     const ents = (await requests(`Status != 'RequestStatusClosed_c'`, layout))
         .concat(await requests(`Status = 'RequestStatusClosed_c' and CloseTime > ${since}`, layout));
     const files = writeBatches(ents.map(e => toRow(e, true)));
@@ -191,7 +199,7 @@ async function backfill() {
 
 async function cycle(state) {
     const t0 = Date.now();
-    const changed = await requests(`LastUpdateTime > ${Math.max(0, state.lastUpdate - config.OVERLAP_MS)}`, LAYOUT + ',Description');
+    const changed = await requests(`LastUpdateTime > ${Math.max(0, state.lastUpdate - config.OVERLAP_MS)}`, DETAIL_LAYOUT);
     const unowned = await requests(`Status != 'RequestStatusClosed_c' and OwnedByPerson = null`, LAYOUT);
     const byId = new Map();
     for (const e of unowned) byId.set(e.properties.Id, { e, desc: false });
