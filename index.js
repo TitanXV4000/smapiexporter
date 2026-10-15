@@ -11,12 +11,15 @@ which smjsonparser imports into Mongo.
     keeps logTime moving for the freshness checks (qmond: newest logTime; sf-notify via
     open.php: newest logTime of the unassigned queue) when no case changes for a while.
   - First start (no state file): all open cases plus closed ones updated in the last BACKFILL_DAYS.
+  - Comments (comments.js): the full comment list of every changed case, plus a background
+    fill of older cases' history, written as comments_*.json batches.
 Field mapping and findings: qmon/notes/otsm-api.md.
 */
 const puppeteer = require('puppeteer');
 const tsanfordLogger = require('tsanford-logger');
 const fs = require('fs');
 const path = require('path');
+const { createComments } = require('./comments');
 
 const logger = tsanfordLogger.newLogger();
 
@@ -33,6 +36,8 @@ const config = {
     BATCH_ROWS: parseInt(process.env.BATCH_ROWS || '1000', 10),
     MAX_FAILED_CYCLES: parseInt(process.env.MAX_FAILED_CYCLES || '5', 10),
     BACKLOG_LIMIT: parseInt(process.env.BACKLOG_LIMIT || '20', 10),   // unread batches before writing changes only
+    COMMENT_FILL_PER_CYCLE: parseInt(process.env.COMMENT_FILL_PER_CYCLE || '100', 10),   // older cases' comment history per minute
+    COMMENT_BATCH_CASES: parseInt(process.env.COMMENT_BATCH_CASES || '200', 10),          // cases per comments file
 };
 const STATE_DIR = path.join(config.OUTPUT_PATH, 'state');      // the parser only watches the top level
 const STATE_FILE = path.join(STATE_DIR, 'api-state.json');
@@ -83,6 +88,11 @@ process.on('unhandledRejection', err => { logger.error(`Unhandled promise reject
 process.on('uncaughtException', err => { logger.error(`Uncaught exception, exiting: ${err && err.stack ? err.stack : err}`); process.exit(1); });
 
 let page = null;
+const comments = createComments({
+    config, logger, getJson, requests: (filter, layout) => requests(filter, layout), EMS,
+    collabUrl: caseId => `${BASE}/rest/${TENANT}/collaboration/comments/Request/${caseId}`,
+    stateDir: STATE_DIR, writeFile: (prefix, rows) => writeBatches(rows, prefix),
+});
 
 // Same sign-in steps as the report exporter (OpenText SAML)
 async function login() {
@@ -119,6 +129,18 @@ async function apiGet(url, retried) {
     const json = JSON.parse(r.text);
     if (!json.meta || json.meta.completion_status !== 'OK') throw new Error(`Query failed (${url.split('?')[0]}): ${JSON.stringify(json.meta).slice(0, 300)}`);
     return json.entities || [];
+}
+
+// GET that returns the parsed JSON as is (the collaboration service doesn't use the EMS
+// entities/meta format). Logs in again once on 401.
+async function getJson(url, retried) {
+    const r = await page.evaluate(async u => {
+        const res = await fetch(u, { credentials: 'include', headers: { 'Accept': 'application/json' } });
+        return { status: res.status, text: await res.text() };
+    }, url);
+    if (r.status === 401 && !retried) { logger.warn('OTSM session expired (401); logging in again.'); await login(); return getJson(url, true); }
+    if (r.status !== 200) throw new Error(`HTTP ${r.status} from ${url.split('?')[0]}: ${r.text.slice(0, 200)}`);
+    return JSON.parse(r.text);
 }
 
 // All pages of a Request query. Sorted by Id, which never changes: sorted by LastUpdateTime,
@@ -187,14 +209,16 @@ function toRow(e, withDescription) {
 
 // Writes rows as batches of BATCH_ROWS (at least one, possibly empty, so the parser
 // always sees a new file each minute). Atomic: written in state/, then renamed.
+// prefix "cases" or "comments"; comments files hold COMMENT_BATCH_CASES cases each.
 let batchSeq = 0;
-function writeBatches(rows) {
+function writeBatches(rows, prefix = 'cases') {
+    const size = prefix === 'comments' ? config.COMMENT_BATCH_CASES : config.BATCH_ROWS;
     const chunks = [];
-    for (let i = 0; i < rows.length; i += config.BATCH_ROWS) chunks.push(rows.slice(i, i + config.BATCH_ROWS));
+    for (let i = 0; i < rows.length; i += size) chunks.push(rows.slice(i, i + size));
     if (chunks.length === 0) chunks.push([]);
     for (const chunk of chunks) {
-        // Names sort oldest first, the order the parser reads them in
-        const name = `cases_${new Date().toISOString().replace(/[:.]/g, '-')}_${String(batchSeq++).padStart(6, '0')}.json`;
+        // Names sort oldest first within a prefix, the order the parser reads them in
+        const name = `${prefix}_${new Date().toISOString().replace(/[:.]/g, '-')}_${String(batchSeq++).padStart(6, '0')}.json`;
         const tmp = path.join(STATE_DIR, name + '.tmp');
         fs.writeFileSync(tmp, JSON.stringify(chunk));
         if (config.ARCHIVE_PATH) fs.copyFileSync(tmp, path.join(config.ARCHIVE_PATH, name));
@@ -238,6 +262,10 @@ async function cycle(state) {
     const files = writeBatches(rows.map(x => toRow(x.e, x.desc)));
     const newest = all.reduce((m, x) => Math.max(m, x.e.properties.LastUpdateTime || 0), state.lastUpdate);
     logger.info(`Batch: ${all.length} cases (${changed.length} changed with description, ${unowned.length} unowned), ${files} file(s), ${Date.now() - t0} ms.`);
+    // Comments after the case batch, so the parser has the cases first. A failure here is
+    // logged and retried next minute; it doesn't fail the case batch.
+    try { await comments.cycle(changed.map(e => e.properties.Id), backlog > config.BACKLOG_LIMIT); }
+    catch (err) { logger.error(`Comments cycle failed: ${err.message}`); }
     return newest;
 }
 
