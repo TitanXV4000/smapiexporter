@@ -52,11 +52,28 @@ const LAYOUT = [
     'SLT.TargetDate', 'PhaseId', 'AssignedToGroup.Name', 'CompanyTimeZoneUser_c',
     'ProductDevID_c', 'ProductModel_c.DisplayLabel', 'ClosureCode_c.DisplayLabel', 'ResolvedDateTime_c', 'CloseTime',
     'RequestToCompany.DisplayLabel', 'RequestToCompany.TimeZone', 'RequestToCompany.CompanyTimeZoneUser_c', 'RequestToCompany.RoutingRegion_c',
+    'RequestToCompany.Headquarters',
     'RegisteredForLocation.DisplayLabel', 'RegisteredForLocation.DisplayName',
 ].join(',');
 const DETAIL_LAYOUT = LAYOUT + ',Description,LatestComment_c';   // changed cases only
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// The company's "Headquarters (Country)" is a link to a Location ("NA/BRA", "Brazil").
+// Related fields only go one level deep, so the case gives the Location Id and the names
+// come from one Location query for Ids not seen before (89 distinct for all open cases).
+const locations = new Map();     // Id -> { label, name }, kept for the life of the container
+async function resolveHeadquarters(ents) {
+    const ids = [...new Set(ents.map(e => rel(e, 'RequestToCompany', 'Headquarters')).filter(id => id && !locations.has(String(id))))];
+    for (let i = 0; i < ids.length; i += 200) {
+        const chunk = ids.slice(i, i + 200);
+        const found = await apiGet(`${EMS('Location')}?filter=${encodeURIComponent(`Id in (${chunk.map(id => `'${id}'`).join(',')})`)}` +
+            `&layout=Id,DisplayLabel,DisplayName&size=200`);
+        for (const l of found) locations.set(String(l.properties.Id), { label: val(l.properties.DisplayLabel), name: val(l.properties.DisplayName) });
+        for (const id of chunk) if (!locations.has(String(id))) locations.set(String(id), { label: '', name: '' });
+    }
+}
+const headquarters = e => locations.get(String(rel(e, 'RequestToCompany', 'Headquarters') || '')) || { label: '', name: '' };
 const rel = (e, link, prop) => ((e.related_properties || {})[link] || {})[prop];
 const val = v => (v === undefined || v === null) ? '' : v;
 const inIds = ids => `Id in (${ids.map(i => `'${i}'`).join(',')})`;
@@ -141,6 +158,8 @@ function toRow(e, withDescription) {
         'Requested for company.Display Name': val(rel(e, 'RequestToCompany', 'DisplayLabel')),
         'Requested for company.Time zone': val(rel(e, 'RequestToCompany', 'TimeZone')),
         'Requested for company.Headquarters (Region)': val(rel(e, 'RequestToCompany', 'RoutingRegion_c')),
+        'Requested for company.Headquarters (Country).Display label': headquarters(e).label,   // "NA/BRA"
+        'Requested for company.Headquarters (Country).Display Name': headquarters(e).name,     // "Brazil"
         'FTS Host Account': val(p.FTSHostAccount_c),
         'FTS Host Password': val(p.FTSHostPassword_c),
         'Closed DateTime': val(p.ClosedDateTime_c),
@@ -195,6 +214,7 @@ async function backfill() {
         // Closed cases updated in the window: closing updates a case, and some closed cases
         // have no CloseTime (only Closed/Resolved DateTime, or none), so CloseTime alone misses them
         .concat(await requests(`Status = 'RequestStatusClosed_c' and LastUpdateTime > ${since}`, layout));
+    await resolveHeadquarters(ents);
     const files = writeBatches(ents.map(e => toRow(e, true)));
     logger.info(`Back-fill: ${ents.length} cases in ${files} files.`);
     return ents.reduce((m, e) => Math.max(m, e.properties.LastUpdateTime || 0), 0);
@@ -214,6 +234,7 @@ async function cycle(state) {
     const backlog = fs.readdirSync(config.OUTPUT_PATH).filter(f => f.endsWith('.json')).length;
     if (backlog > config.BACKLOG_LIMIT) logger.warn(`${backlog} batches not yet read by the parser; writing only the ${changed.length} changed cases.`);
     const rows = backlog > config.BACKLOG_LIMIT ? all.filter(x => x.desc) : all;
+    await resolveHeadquarters(rows.map(x => x.e));
     const files = writeBatches(rows.map(x => toRow(x.e, x.desc)));
     const newest = all.reduce((m, x) => Math.max(m, x.e.properties.LastUpdateTime || 0), state.lastUpdate);
     logger.info(`Batch: ${all.length} cases (${changed.length} changed with description, ${unowned.length} unowned), ${files} file(s), ${Date.now() - t0} ms.`);
