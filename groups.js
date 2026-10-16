@@ -1,7 +1,8 @@
 /* Assignment groups and their members, for the server-side board's team setup.
 At startup and every GROUP_REFRESH_HOURS: every PersonGroup (Id, Name, region, time zone)
 and its members (Person?filter=PersonToGroup[Id = '<group>'], one query per group).
-Written as one groups_<time>.json batch: [{ id, name, region, timeZone, members: [names] }];
+Written as one groups_<time>.json batch: [{ id, name, region, timeZone, members: [names], people: [{ name, email }] }];
+The emails let the board verify who signs up for alerts.
 the parser replaces smwb.groups with it.
 */
 const REGION_NAMES = { '12975': 'EMEA', '12976': 'NA', '12977': 'APAC' };   // Region_c location Ids
@@ -15,9 +16,10 @@ function createGroups({ config, logger, apiGet, EMS, writeFile }) {
         const out = [];
         for (const g of groups) {
             const p = g.properties;
-            const members = await apiGet(`${EMS('Person')}?filter=${encodeURIComponent(`PersonToGroup[Id = '${p.Id}']`)}&layout=Id,Name&size=1000`);
+            const members = await apiGet(`${EMS('Person')}?filter=${encodeURIComponent(`PersonToGroup[Id = '${p.Id}']`)}&layout=Id,Name,Email&size=1000`);
             out.push({ id: String(p.Id), name: p.Name || '', region: REGION_NAMES[String(p.Region_c || '')] || '', timeZone: p.TimeZone || '',
-                members: members.map(m => m.properties.Name || '').filter(Boolean) });
+                members: members.map(m => m.properties.Name || '').filter(Boolean),
+                people: members.filter(m => m.properties.Name).map(m => ({ name: m.properties.Name, email: m.properties.Email || '' })) });
         }
         writeFile('groups', out);
         last = Date.now();
