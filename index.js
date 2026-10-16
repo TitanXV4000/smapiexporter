@@ -57,7 +57,7 @@ const LAYOUT = [
     'SLT.TargetDate', 'PhaseId', 'AssignedToGroup.Name', 'CompanyTimeZoneUser_c',
     'ProductDevID_c', 'ProductModel_c.DisplayLabel', 'ClosureCode_c.DisplayLabel', 'ResolvedDateTime_c', 'CloseTime',
     'RequestToCompany.DisplayLabel', 'RequestToCompany.TimeZone', 'RequestToCompany.CompanyTimeZoneUser_c', 'RequestToCompany.RoutingRegion_c',
-    'RequestToCompany.Headquarters',
+    'RequestToCompany.Headquarters', 'FTSCustAccount_c', 'FTSCustPassword_c', 'ProductVersion.DisplayLabel', 'UserOptions',
     'RegisteredForLocation.DisplayLabel', 'RegisteredForLocation.DisplayName',
 ].join(',');
 const DETAIL_LAYOUT = LAYOUT + ',Description,LatestComment_c';   // changed cases only
@@ -77,6 +77,14 @@ async function resolveHeadquarters(ents) {
         for (const l of found) locations.set(String(l.properties.Id), { label: val(l.properties.DisplayLabel), name: val(l.properties.DisplayName) });
         for (const id of chunk) if (!locations.has(String(id))) locations.set(String(id), { label: '', name: '' });
     }
+}
+// "Product Platform" is one of the case form's extra fields, kept in the UserOptions JSON
+// (complexTypeProperties[0].properties.ProductPlatform_c: Linux_c, Windows_c, Unix_c, SaaS_c)
+function productPlatform(userOptions) {
+    try {
+        const o = typeof userOptions === 'string' ? JSON.parse(userOptions) : userOptions;
+        return val((((o || {}).complexTypeProperties || [])[0] || {}).properties ? o.complexTypeProperties[0].properties.ProductPlatform_c : '');
+    } catch (err) { return ''; }
 }
 const headquarters = e => locations.get(String(rel(e, 'RequestToCompany', 'Headquarters') || '')) || { label: '', name: '' };
 const rel = (e, link, prop) => ((e.related_properties || {})[link] || {})[prop];
@@ -184,6 +192,10 @@ function toRow(e, withDescription) {
         'Requested for company.Headquarters (Country).Display Name': headquarters(e).name,     // "Brazil"
         'FTS Host Account': val(p.FTSHostAccount_c),
         'FTS Host Password': val(p.FTSHostPassword_c),
+        'FTS Customer Account': val(p.FTSCustAccount_c),
+        'FTS Customer Password': val(p.FTSCustPassword_c),
+        'Product version.Display label': val(rel(e, 'ProductVersion', 'DisplayLabel')),   // "25.3 (5.1.2)"
+        'Product Platform': productPlatform(p.UserOptions),                              // "Linux_c"...
         'Closed DateTime': val(p.ClosedDateTime_c),
         'Last Updated By.Name': val(rel(e, 'LastUpdatedBy_c', 'Name')),
         'SLT.Next target time': val(rel(e, 'SLT', 'TargetDate')),
