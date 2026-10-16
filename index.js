@@ -20,6 +20,7 @@ const tsanfordLogger = require('tsanford-logger');
 const fs = require('fs');
 const path = require('path');
 const { createComments } = require('./comments');
+const { createGroups } = require('./groups');
 
 const logger = tsanfordLogger.newLogger();
 
@@ -38,6 +39,7 @@ const config = {
     BACKLOG_LIMIT: parseInt(process.env.BACKLOG_LIMIT || '20', 10),   // unread batches before writing changes only
     COMMENT_FILL_PER_CYCLE: parseInt(process.env.COMMENT_FILL_PER_CYCLE || '100', 10),   // older cases' comment history per minute
     COMMENT_BATCH_CASES: parseInt(process.env.COMMENT_BATCH_CASES || '200', 10),          // cases per comments file
+    GROUP_REFRESH_HOURS: parseFloat(process.env.GROUP_REFRESH_HOURS || '6'),              // assignment groups and members
 };
 const STATE_DIR = path.join(config.OUTPUT_PATH, 'state');      // the parser only watches the top level
 const STATE_FILE = path.join(STATE_DIR, 'api-state.json');
@@ -101,6 +103,7 @@ const comments = createComments({
     collabUrl: caseId => `${BASE}/rest/${TENANT}/collaboration/comments/Request/${caseId}`,
     stateDir: STATE_DIR, writeFile: (prefix, rows) => writeBatches(rows, prefix),
 });
+const groups = createGroups({ config, logger, apiGet: url => apiGet(url), EMS, writeFile: (prefix, rows) => writeBatches(rows, prefix) });
 
 // Same sign-in steps as the report exporter (OpenText SAML)
 async function login() {
@@ -224,7 +227,7 @@ function toRow(e, withDescription) {
 // prefix "cases" or "comments"; comments files hold COMMENT_BATCH_CASES cases each.
 let batchSeq = 0;
 function writeBatches(rows, prefix = 'cases') {
-    const size = prefix === 'comments' ? config.COMMENT_BATCH_CASES : config.BATCH_ROWS;
+    const size = prefix === 'comments' ? config.COMMENT_BATCH_CASES : prefix === 'groups' ? 100000 : config.BATCH_ROWS;
     const chunks = [];
     for (let i = 0; i < rows.length; i += size) chunks.push(rows.slice(i, i + size));
     if (chunks.length === 0) chunks.push([]);
@@ -278,6 +281,7 @@ async function cycle(state) {
     // logged and retried next minute; it doesn't fail the case batch.
     try { await comments.cycle(changed.map(e => e.properties.Id), backlog > config.BACKLOG_LIMIT); }
     catch (err) { logger.error(`Comments cycle failed: ${err.message}`); }
+    await groups.cycle();
     return newest;
 }
 
