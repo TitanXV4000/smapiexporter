@@ -50,3 +50,7 @@ docker run -d --name smapiexporter --restart unless-stopped --shm-size 2g \
 
 On any unexpected error the process
 exits, so Docker restarts it with a fresh login.
+
+## Also
+- **Comments** (`comments.js`): each changed case's full comment list every minute, plus a background fill of older cases' history (`COMMENT_FILL_PER_CYCLE`, default 100 cases a minute); written as `comments_*.json`.
+- **Assignment groups** (`groups.js`): every group and its members at startup and every `GROUP_REFRESH_HOURS` (6), as `groups_*.json`, for the qmon board's team setup.
